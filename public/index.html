@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>io game</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #1a1a2e; display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100vh; font-family: sans-serif; }
+    canvas { border-radius: 8px; cursor: none; }
+    #hud { position: fixed; top: 12px; left: 12px; color: white; font-size: 14px; background: rgba(0,0,0,0.4); padding: 8px 12px; border-radius: 8px; }
+    #lb { position: fixed; top: 12px; right: 12px; color: white; font-size: 13px; background: rgba(0,0,0,0.4); padding: 8px 12px; border-radius: 8px; min-width: 130px; }
+    #lb div { margin: 2px 0; }
+    #screen { position: fixed; inset: 0; background: rgba(0,0,0,0.75); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; }
+    #screen h1 { color: white; font-size: 32px; }
+    #screen p  { color: #aaa; font-size: 15px; }
+    #nameInput { padding: 8px 14px; border-radius: 6px; border: none; font-size: 15px; width: 220px; text-align: center; }
+    #playBtn { padding: 10px 32px; background: #378ADD; color: white; border: none; border-radius: 6px; font-size: 15px; cursor: pointer; }
+    #playBtn:hover { background: #185FA5; }
+  </style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="hud">Mass: 10</div>
+<div id="lb"><strong>leaderboard</strong></div>
+<div id="screen">
+  <h1>io game</h1>
+  <p>eat food and smaller players to grow</p>
+  <input id="nameInput" placeholder="enter your name" maxlength="16" />
+  <button id="playBtn">play</button>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const hud = document.getElementById('hud');
+const lb  = document.getElementById('lb');
+const screen = document.getElementById('screen');
+
+canvas.width  = window.innerWidth;
+canvas.height = window.innerHeight;
+
+const socket = io();
+let state = { players: {}, food: [] };
+let myId = null;
+let mouseX = canvas.width / 2;
+let mouseY = canvas.height / 2;
+
+socket.on('connect', () => { myId = socket.id; });
+socket.on('state', s => { state = s; });
+socket.on('respawn', () => { /* handled by state update */ });
+
+document.addEventListener('mousemove', e => { mouseX = e.clientX; mouseY = e.clientY; });
+
+setInterval(() => {
+  if (!myId || !state.players[myId]) return;
+  const dx = mouseX - canvas.width / 2;
+  const dy = mouseY - canvas.height / 2;
+  socket.emit('move', { dx, dy });
+}, 1000 / 60);
+
+document.getElementById('playBtn').onclick = () => {
+  const name = document.getElementById('nameInput').value.trim() || 'Player';
+  socket.emit('setName', name);
+  screen.style.display = 'none';
+};
+
+document.getElementById('nameInput').addEventListener('keydown', e => {
+  if (e.key === 'Enter') document.getElementById('playBtn').click();
+});
+
+const COLORS = ['#378ADD','#1D9E75','#D85A30','#D4537E','#7F77DD','#639922','#BA7517','#E24B4A'];
+
+function draw() {
+  requestAnimationFrame(draw);
+  const me = state.players[myId];
+  const W = canvas.width, H = canvas.height;
+  ctx.clearRect(0, 0, W, H);
+
+  const camX = me ? me.x : 1000;
+  const camY = me ? me.y : 1000;
+  const mass  = me ? me.mass : 10;
+  const scale = Math.min(W, H) / (180 + Math.sqrt(mass) * 18);
+
+  ctx.save();
+  ctx.translate(W / 2, H / 2);
+  ctx.scale(scale, scale);
+  ctx.translate(-camX, -camY);
+
+  // background grid
+  ctx.fillStyle = '#f5f5f0';
+  ctx.fillRect(0, 0, 2000, 2000);
+  ctx.strokeStyle = '#e0dfd8';
+  ctx.lineWidth = 1;
+  for (let x = 0; x <= 2000; x += 100) { ctx.beginPath(); ctx.moveTo(x,0); ctx.lineTo(x,2000); ctx.stroke(); }
+  for (let y = 0; y <= 2000; y += 100) { ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(2000,y); ctx.stroke(); }
+  ctx.strokeStyle = '#aaa'; ctx.lineWidth = 3;
+  ctx.strokeRect(0, 0, 2000, 2000);
+
+  // food
+  for (const f of state.food) {
+    ctx.beginPath();
+    ctx.arc(f.x, f.y, 5, 0, Math.PI * 2);
+    ctx.fillStyle = COLORS[f.id % COLORS.length];
+    ctx.fill();
+  }
+
+  // players sorted by mass (smaller drawn first)
+  const ps = Object.entries(state.players).sort((a,b) => a[1].mass - b[1].mass);
+  for (const [id, p] of ps) {
+    const r = Math.sqrt(p.mass) * 4.5;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fillStyle = p.color || '#378ADD';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(0,0,0,0.15)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    if (r > 12) {
+      ctx.fillStyle = 'rgba(255,255,255,0.9)';
+      ctx.font = `${Math.min(r * 0.45, 13)}px sans-serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(id === myId ? 'You' : (p.name || 'Player'), p.x, p.y);
+    }
+  }
+
+  ctx.restore();
+
+  // hud
+  hud.textContent = 'Mass: ' + Math.floor(mass);
+  const sorted = Object.values(state.players).sort((a,b) => b.mass - a.mass).slice(0,5);
+  lb.innerHTML = '<strong>leaderboard</strong>' + sorted.map((p,i) =>
+    `<div>${i+1}. ${p.name||'Player'} — ${Math.floor(p.mass)}</div>`
+  ).join('');
+}
+draw();
+</script>
+</body>
+</html>
